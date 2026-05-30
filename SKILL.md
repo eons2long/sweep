@@ -1,3 +1,13 @@
+---
+name: sweep
+description: |
+  Safe disk cleanup workflow for AI agents. Use when the user asks to free disk
+  space, clean caches, analyze disk usage, clear build artifacts, or reclaim
+  storage on macOS/Linux with preview-token confirmation.
+metadata:
+  short-description: Safe disk cleanup
+---
+
 # Sweep — Safe Disk Cleanup for AI Agents
 
 Analyze disk usage by category, then clean with user-confirmed whitelist-based deletion.
