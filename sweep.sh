@@ -621,8 +621,11 @@ cmd_clean() {
             recent_count=$(manifest_recent_file_count "$manifest")
             if [[ "$recent_count" -gt 0 ]]; then
                 echo "⚠️  $recent_count file(s) in the preview manifest were modified within ${MIN_FILE_AGE_HOURS}h."
-                echo "   Refusing cleanup. Inspect manually or try again later."
-                return 1
+                if [[ "$tag" == "caution" ]]; then
+                    echo "   Refusing cleanup for caution category '$desc'. Inspect manually or try again later."
+                    return 1
+                fi
+                echo "   Continuing because '$desc' is tagged safe."
             fi
         fi
 

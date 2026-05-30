@@ -64,7 +64,7 @@ Cleanup is permanent and manifest-based: the script deletes only the top-level i
 - **Whitelist only.** The script only touches paths explicitly listed in the safe/caution categories below. It cannot delete arbitrary files.
 - **Preview before delete.** Every destructive `clean --yes` requires a fresh preview token from a preceding `preview`.
 - **Manifest-only deletion.** `clean --yes` deletes only the top-level items captured by `preview`, not newly created items and not the whitelisted parent directory.
-- **Recent-file protection.** If any file in the preview manifest was modified within the last 24 hours, `clean --yes` refuses the whole cleanup, including `safe` categories.
+- **Recent-file policy.** If previewed files were modified within the last 24 hours, `safe` categories warn and continue, while `caution` categories refuse cleanup.
 - **No `rm -rf` on user data.** `manual` tagged categories are read-only and the script will refuse to clean them.
 - **Dry-run by default.** The `clean` command prints what it would do and asks for final `--yes` flag plus preview token.
 - **Permanent cleanup.** Deletion is direct, not moved to Trash, so cleanup actually reclaims disk space.
@@ -116,6 +116,6 @@ Cleanup is permanent and manifest-based: the script deletes only the top-level i
 - `~/.gitconfig`, `~/.git-credentials`
 - Any path with `node_modules` inside a project (use `npkill` instead)
 - System paths outside `~/Library` on macOS (except `/tmp` on Linux)
-- Any file younger than 24 hours in cache directories
+- Files younger than 24 hours in `caution` categories
 - `~/Documents`, `~/Desktop`, `~/Pictures`, `~/Movies`
 - Any git repository directory
