@@ -4,7 +4,7 @@ set -euo pipefail
 # sweep — Safe disk cleanup for AI agents
 # Whitelist-based: only touches paths explicitly defined here.
 
-VERSION="0.3.0"
+VERSION="0.4.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DRY_RUN=true
 MIN_FILE_AGE_HOURS=24
@@ -119,9 +119,35 @@ hash_stdin() {
     fi
 }
 
+terminal_cols() {
+    if [[ -n "${TERM:-}" ]] && command -v tput &>/dev/null; then
+        tput cols 2>/dev/null || echo 80
+    else
+        echo 80
+    fi
+}
+
+should_skip_target() {
+    local raw_path="$1"
+    local target="$2"
+    local base
+
+    base="$(basename "$target")"
+    if [[ "$OS" == "macos" ]] && [[ "$raw_path" == "~/Library/Caches" ]]; then
+        case "$base" in
+            com.apple.*|CloudKit|GeoServices|PassKit|GameKit|FamilyCircle|familycircled|Animoji|ARFileCache|LSMImageCache|SharedImageCache|sportsd|askpermissiond|TrickPlay|tvapp_bag|features_config)
+                return 0
+                ;;
+        esac
+    fi
+
+    return 1
+}
+
 collect_delete_targets() {
     local raw_path="$1"
     local outfile="$2"
+    local target
 
     : > "$outfile"
 
@@ -131,8 +157,12 @@ collect_delete_targets() {
         fi
 
         if [[ -d "$p" ]]; then
-            find "$p" -mindepth 1 -maxdepth 1 -print0 2>/dev/null >> "$outfile" || true
+            while IFS= read -r -d '' target; do
+                should_skip_target "$raw_path" "$target" && continue
+                printf '%s\0' "$target" >> "$outfile"
+            done < <(find "$p" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || true)
         else
+            should_skip_target "$raw_path" "$p" && continue
             printf '%s\0' "$p" >> "$outfile"
         fi
     done < <(expand_path "$raw_path")
@@ -163,6 +193,42 @@ manifest_total_bytes() {
     done < "$manifest"
 
     echo "$total"
+}
+
+manifest_recent_file_count() {
+    local manifest="$1"
+    local target count=0
+
+    while IFS= read -r -d '' target; do
+        if [[ ! -e "$target" ]]; then
+            continue
+        fi
+
+        if [[ -d "$target" ]]; then
+            count=$((count + $(find "$target" -type f -mmin "-$((MIN_FILE_AGE_HOURS * 60))" 2>/dev/null | wc -l | tr -d ' ')))
+        elif [[ -f "$target" ]]; then
+            if find "$target" -type f -mmin "-$((MIN_FILE_AGE_HOURS * 60))" 2>/dev/null | grep -q .; then
+                count=$((count + 1))
+            fi
+        fi
+    done < "$manifest"
+
+    echo "$count"
+}
+
+print_manifest_targets() {
+    local manifest="$1"
+    local target size
+
+    echo "   Full manifest:"
+    while IFS= read -r -d '' target; do
+        if [[ -e "$target" ]]; then
+            size=$(du_human "$target")
+        else
+            size="missing"
+        fi
+        printf "     %-10s %s\n" "$size" "$target"
+    done < "$manifest"
 }
 
 preview_state_dir() {
@@ -384,30 +450,34 @@ cmd_analyze() {
     local results=()
 
     while IFS='|' read -r tag path desc recursive; do
-        while IFS= read -r p; do
-            if [[ ! -e "$p" ]]; then
-                continue
-            fi
+        local manifest_tmp size target_count
+        manifest_tmp=$(mktemp "$(preview_state_dir)/analyze.XXXXXX")
+        collect_delete_targets "$path" "$manifest_tmp"
+        target_count=$(manifest_count "$manifest_tmp")
 
-            local size
-            size=$(du_bytes "$p")
+        if (( target_count == 0 )); then
+            rm -f "$manifest_tmp"
+            continue
+        fi
 
-            if (( size < 1048576 )); then  # Skip < 1MB
-                continue
-            fi
+        size=$(manifest_total_bytes "$manifest_tmp")
+        rm -f "$manifest_tmp"
 
-            local human_size
-            human_size=$(format_size "$size")
-            results+=("$(printf "%-12s %-50s %s" "$human_size" "$desc" "$tag")")
+        if (( size < 1048576 )); then  # Skip < 1MB
+            continue
+        fi
 
-            if [[ "$tag" == "safe" ]]; then
-                total_reclaimable=$((total_reclaimable + size))
-            fi
-        done < <(expand_path "$path")
+        local human_size
+        human_size=$(format_size "$size")
+        results+=("$(printf "%-12s %-50s %s" "$human_size" "$desc" "$tag")")
+
+        if [[ "$tag" == "safe" ]]; then
+            total_reclaimable=$((total_reclaimable + size))
+        fi
     done < <(get_categories)
 
     printf "%-12s %-50s %s\n" "Size" "Category" "Tag"
-    printf "%$(tput cols || echo 80)s\n" | tr ' ' '─'
+    printf "%$(terminal_cols)s\n" | tr ' ' '─'
     for r in "${results[@]}"; do
         echo "$r"
     done
@@ -444,7 +514,7 @@ cmd_preview() {
 
             echo "📁 $desc ($tag)"
             echo "   Path: $p"
-            echo "   Size: $size"
+            echo "   Raw path size: $size"
             echo ""
 
             if [[ "$tag" == "manual" ]]; then
@@ -452,17 +522,6 @@ cmd_preview() {
                 echo "   Use 'ls -la $p' to inspect manually."
                 return
             fi
-
-            # Show top-level contents
-            local count
-            count=$(find "$p" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')
-            echo "   Top-level items: $count"
-
-            # Show largest 5 sub-items
-            echo "   Largest items:"
-            du -sh "$p"/* 2>/dev/null | sort -rh | head -5 | while read -r s i; do
-                printf "     %-10s %s\n" "$s" "$(basename "$i")"
-            done || true
         done < <(expand_path "$path")
 
         if [[ "$tag" != "manual" ]] && $matched_path; then
@@ -488,6 +547,7 @@ cmd_preview() {
             echo ""
             echo "   Manifest items: $target_count"
             echo "   Manifest size: $(format_size "$total_bytes")"
+            print_manifest_targets "$manifest"
             echo "   Preview token: $token"
             echo "   Valid for: $((PREVIEW_TTL_SECONDS / 60)) minutes"
             echo "   After explicit confirmation, run:"
@@ -556,6 +616,14 @@ cmd_clean() {
             validate_preview_token "$preview_token" "$desc" || return 1
             manifest=$(preview_manifest_file "$preview_token")
             validate_manifest_targets "$manifest" "$path" || return 1
+
+            local recent_count
+            recent_count=$(manifest_recent_file_count "$manifest")
+            if [[ "$recent_count" -gt 0 ]]; then
+                echo "⚠️  $recent_count file(s) in the preview manifest were modified within ${MIN_FILE_AGE_HOURS}h."
+                echo "   Refusing cleanup. Inspect manually or try again later."
+                return 1
+            fi
         fi
 
         while IFS= read -r p; do
@@ -566,16 +634,6 @@ cmd_clean() {
 
             local size
             size=$(du_human "$p")
-
-            # Check min file age
-            local recent_count
-            recent_count=$(find "$p" -type f -mtime -"${MIN_FILE_AGE_HOURS}"h 2>/dev/null | wc -l | tr -d ' ')
-
-            if [[ "$recent_count" -gt 0 ]] && [[ "$tag" != "safe" ]]; then
-                echo "⚠️  $recent_count files in '$p' were modified within ${MIN_FILE_AGE_HOURS}h."
-                echo "   Skipping to be safe. Inspect manually or try again later."
-                return 1
-            fi
 
             if ! $force; then
                 echo "🧹 Would clean previewed top-level items under: $p ($size)"

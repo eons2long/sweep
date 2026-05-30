@@ -37,7 +37,7 @@ Giving an AI agent `rm -rf` is terrifying. `sweep` constrains disk cleanup to a 
 | **Manifest-only delete** | Deletes only the top-level items captured by preview, preserving the whitelisted parent directory |
 | **--yes gate** | Dry-run by default; destructive cleanup requires explicit confirmation plus token |
 | **Permanent cleanup** | Deletes manifest items directly instead of moving them to Trash, so disk space is actually reclaimed |
-| **Min file age** | Won't touch files modified in the last 24h (caution categories) |
+| **Min file age** | Won't touch manifest files modified in the last 24h, including `safe` categories |
 | **Tag system** | `safe` / `caution` / `manual` — manual is read-only |
 
 ## As a Codex or Claude Code Skill
